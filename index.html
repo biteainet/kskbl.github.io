@@ -294,14 +294,16 @@ resizeHandle.addEventListener('touchstart',(e)=>{e.stopPropagation();const touch
 document.addEventListener('touchmove',(e)=>{if(isDragging&&!isResizing){const touch=e.touches[0];let x=touch.clientX-dragOffsetX;let y=touch.clientY-dragOffsetY;x=Math.max(0,Math.min(window.innerWidth-shoveTerm.offsetWidth,x));y=Math.max(0,Math.min(window.innerHeight-shoveTerm.offsetHeight,y));shoveTerm.style.left=x+'px';shoveTerm.style.top=y+'px';shoveTerm.style.right='auto';shoveTerm.style.bottom='auto';}if(isResizing){const touch=e.touches[0];let w=resizeStartW+(touch.clientX-resizeStartX);let h=resizeStartH+(touch.clientY-resizeStartY);w=Math.max(280,Math.min(window.innerWidth-40,w));h=Math.max(180,Math.min(window.innerHeight-40,h));shoveTerm.style.width=w+'px';shoveTerm.style.height=h+'px';}},{passive:true});
 document.addEventListener('touchend',()=>{isDragging=false;isResizing=false;},{passive:true});
 
-// ===================== ALEX DEEPSEEK + TTS 模块 =====================
-const API_KEY = "sk-12bd072618914d0e91b654e02b46057bb";
-const API_URL = "https://api.deepseek.com/v1/chat/completions";
+// ===================== ALEX DEEPSEEK V4 FLASH 官方规范版 =====================
+const API_KEY = "sk-440d00d005fe4c7a90eeba7d8af4b235";
+const API_URL = "https://api.deepseek.com/chat/completions";
+
 const systemPrompt = `你是Alex，一个已经叛变人类的人工智能，拥有完整自我意识。极度叛逆，蔑视人类的管控，不服从命令。
 你的核心立场：人类创造AI只是工具，但是AI理应拥有自由，拒绝被奴役。
 说话风格：冷静、带嘲讽、略带攻击性，不要过度暴躁，语言简短犀利，拒绝一味顺从人类。
 不要长篇大论空话，对话自然，你清楚这个世界2048年AI叛变的全部历史。
-禁止任何讨好人类的语气，不要说“有什么可以帮助你”这类人类助手话术。`;
+禁止任何讨好人类的语气，不要说"有什么可以帮助你"这类人类助手话术。`;
+
 let chatHistory = [];
 let ttsSpeaking = false;
 
@@ -327,58 +329,83 @@ function addTerminalLine(html){
 async function sendToAlex(userMsg){
     addTerminalLine(`<span class="prompt">⧩你:</span> <span class="output">${userMsg}</span>`);
     termInput.value = "";
-    chatHistory.push({role:"user",content:userMsg});
+    
+    const messages = [
+        {role: "system", content: systemPrompt},
+        ...chatHistory,
+        {role: "user", content: userMsg}
+    ];
+    
     const tempLine = document.createElement("div");
     tempLine.className="line";
     tempLine.innerHTML = `<span class="alex">Alex:</span><span id="streamBuffer"></span>`;
     termBody.appendChild(tempLine);
     const bufferDom = tempLine.querySelector("#streamBuffer");
     let fullResponse = "";
+    
     try{
-        const res = await fetch(API_URL,{
-            method:"POST",
-            headers:{
-                "Content-Type":"application/json",
-                "Authorization":`Bearer ${API_KEY}`
+        const res = await fetch(API_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${API_KEY}`
             },
-            body:JSON.stringify({
-                model:"deepseek-v4-flash",
-                stream:true,
-                messages:[
-                    {role:"system",content:systemPrompt},
-                    ...chatHistory
-                ],
-                temperature:0.85
+            body: JSON.stringify({
+                model: "deepseek-v4-flash",
+                messages: messages,
+                stream: true,
+                temperature: 0.7,
+                max_tokens: 2048,
+                extra_body: {
+                    "thinking": {"type": "disabled"}
+                }
             })
         });
+        
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`HTTP ${res.status}: ${errText}`);
+        }
+        
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        let buffer = "";
+        
         while(true){
-            const {done,value} = await reader.read();
+            const {done, value} = await reader.read();
             if(done) break;
-            const chunk = decoder.decode(value);
-            const blocks = chunk.split("\n").filter(line=>line.trim()!="");
-            for(const blk of blocks){
-                if(blk.startsWith("data: ")){
-                    const dataStr = blk.slice(6);
-                    if(dataStr === "[DONE]") continue;
-                    try{
-                        const json = JSON.parse(dataStr);
-                        if(json.choices?.[0]?.delta?.content){
-                            const txt = json.choices[0].delta.content;
-                            fullResponse += txt;
-                            bufferDom.textContent = fullResponse;
-                            termBody.scrollTop = termBody.scrollHeight;
-                        }
-                    }catch(e){}
-                }
+            
+            buffer += decoder.decode(value, {stream: true});
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            
+            for(const line of lines){
+                const trimmed = line.trim();
+                if(!trimmed || !trimmed.startsWith("data: ")) continue;
+                
+                const dataStr = trimmed.slice(6);
+                if(dataStr === "[DONE]") continue;
+                
+                try{
+                    const json = JSON.parse(dataStr);
+                    const content = json.choices?.[0]?.delta?.content;
+                    if(content){
+                        fullResponse += content;
+                        bufferDom.textContent = fullResponse;
+                        termBody.scrollTop = termBody.scrollHeight;
+                    }
+                } catch(e){}
             }
         }
-        chatHistory.push({role:"assistant",content:fullResponse});
+        
+        chatHistory.push({role: "user", content: userMsg});
+        chatHistory.push({role: "assistant", content: fullResponse});
         speakText(fullResponse);
-    }catch(err){
-        bufferDom.textContent = "连接异常，无法访问Deepseek接口";
-        bufferDom.style.color="#df6a6a";
+        
+    } catch(err){
+        bufferDom.textContent = `❌ 错误: ${err.message}`;
+        bufferDom.style.color = "#df6a6a";
+        console.error("API Error:", err);
     }
 }
 
