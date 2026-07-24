@@ -342,7 +342,7 @@ async function sendToAlex(userMsg){
                 "Authorization":`Bearer ${API_KEY}`
             },
             body:JSON.stringify({
-                model:"deepseek-v4-flash",
+                model:"deepseek-v4-pro",
                 stream:true,
                 messages:[
                     {role:"system",content:systemPrompt},
